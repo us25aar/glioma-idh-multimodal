@@ -62,8 +62,10 @@ def make_pipeline(name: str, y_train: pd.Series, seed: int) -> Pipeline:
     return Pipeline([("preprocess", preprocess), ("classifier", estimator)])
 
 
-def binary_metrics(y: np.ndarray, probabilities: np.ndarray) -> dict:
-    predictions = probabilities >= 0.5
+def binary_metrics(y: np.ndarray, probabilities: np.ndarray, threshold: float = 0.5) -> dict:
+    if not 0 <= threshold <= 1:
+        raise ValueError('Classification threshold must be between zero and one.')
+    predictions = probabilities >= threshold
     return {
         "roc_auc": float(roc_auc_score(y, probabilities)),
         "average_precision": float(average_precision_score(y, probabilities)),

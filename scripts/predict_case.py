@@ -11,7 +11,7 @@ import torch
 
 from glioma_idh.data import sha256
 from glioma_idh.features import encode_views, make_encoder
-from glioma_idh.imaging import preprocess_case
+from glioma_idh.imaging import SEQUENCES, preprocess_case
 from glioma_idh.multimodal import predict_cached
 
 
@@ -31,14 +31,26 @@ def main():
     views,info,_=preprocess_case(row)
     encoder=make_encoder(args.weights_dir)
     model_info=torch.load(args.models/"fusion.pt",weights_only=True,map_location="cpu")
+    provenance = model_info['feature_provenance']
+    if (provenance.get('preprocess_version') != info['preprocess_version']
+            or provenance.get('sequence_order') != list(SEQUENCES)):
+        raise ValueError('MRI preprocessing differs from training provenance.')
     if model_info["feature_provenance"]["weights_sha256"] != sha256(args.weights_dir/"checkpoints/resnet18-f37072fd.pth"):
         raise ValueError("Encoder weights differ from training provenance.")
     image=encode_views(encoder,views)[None,:]
     patients=pd.DataFrame({"age":[args.age],"sex":[args.sex]})
     probability=float(predict_cached(args.models,"fusion",image,patients)[0])
-    print(json.dumps({"scope":"research_only","probability_idh_mutant_uncalibrated":probability,
+    output = {"scope":"research_only","probability_idh_mutant_uncalibrated":probability,
         "preprocessing_version":info["preprocess_version"],"threshold_applied":False,
-        "limitation":"No clinical interpretation or validated operating threshold is supplied."},indent=2))
+        "limitation":"Research output; clinical validity and external transportability have not been established."}
+    if (args.models / 'fusion_calibration.joblib').is_file():
+        from glioma_idh.validation import predict_model
+        _, calibrated, threshold = predict_model(args.models, 'fusion', image, patients)
+        output.update({'probability_idh_mutant_calibrated': float(calibrated[0]),
+                       'development_selected_threshold': threshold,
+                       'research_prediction': 'IDH-mutant' if calibrated[0] >= threshold else 'IDH-wildtype',
+                       'threshold_applied': True})
+    print(json.dumps(output,indent=2))
 
 
 if __name__=="__main__":

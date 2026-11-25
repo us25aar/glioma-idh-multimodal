@@ -1,0 +1,14 @@
+{
+  "selection_csv": "outputs/development/acquisition/selection.csv",
+  "development_csv": "outputs/week1/development_patients.csv",
+  "split_lock": "outputs/week1/split_lock.json",
+  "image_manifest": "data/image_manifest_development.csv",
+  "processed_dir": "data/processed/development",
+  "features_dir": "data/features/development",
+  "weights_dir": "outputs/weights",
+  "output_dir": "outputs/development/validation",
+  "seeds": [42, 43, 44],
+  "max_epochs": 50,
+  "calibration_fraction": 0.2,
+  "stopping_fraction": 0.2
+}

@@ -1,8 +1,26 @@
 # Glioma IDH Multimodal MS Project
 
-Current interim submission: `reports/Glioma IDH Interim Progress Report.docx` (14 November 2026). The public MRI transfer now works. A 20-patient real development pilot has completed preprocessing, frozen ResNet-18 extraction, matched clinical/MRI/fusion training across five folds and three seeds, and raw-image inference verification. All 32 automated checks pass. Detailed evidence is under `outputs/ipr/real_pilot`. The 125 reserved patients remain unevaluated.
+Latest executed milestone: all 497 development MRI file sets have been acquired. One empty supplied tumour mask was excluded consistently, leaving 496 patients for frozen ResNet-18 extraction and five-model validation across five outer folds and three seeds. All 46 automated checks pass, all 7,440 out-of-fold predictions were reproduced from saved fold models, and raw-MRI inference matches cached inference exactly. Evidence is under `outputs/development/validation`; the 125 reserved patients remain unevaluated. Earlier IPR documents and pilot evidence remain local historical records.
 
-Predict IDH-mutant versus IDH-wildtype status from four MRI sequences and preoperative clinical inputs. The eight-week project begins with real UTSW clinical metadata, reproducible cohort construction, fixed patient partitions, and development-only clinical baselines. MRI processing and multimodal training follow after data acquisition and compute decisions.
+Predict IDH-mutant versus IDH-wildtype status from four MRI sequences and preoperative age and sex. The implementation includes real UTSW acquisition, reproducible cohort construction, fixed patient partitions, tumour-focused MRI processing, frozen feature extraction, clinical/MRI/fusion models, independent outer-fold scoring, calibration and saved-model inference. The current experiments run on the local CPU; cloud access remains unconfirmed.
+
+## Current development results
+
+The common cohort contains 141 IDH-mutant and 355 wildtype patients. The table reports mean raw pooled out-of-fold ROC-AUC across seeds 42, 43 and 44, using the same original outer folds and separate inner stopping/calibration data.
+
+| Model | Mean pooled raw ROC-AUC | SD across seeds | Mean fold raw ROC-AUC |
+| --- | ---: | ---: | ---: |
+| Age-only logistic regression | 0.868 | 0.002 | 0.871 |
+| Age/sex logistic regression | 0.865 | 0.003 | 0.867 |
+| Clinical MLP | 0.835 | 0.014 | 0.866 |
+| MRI-only neural head | 0.806 | 0.017 | 0.814 |
+| MRI/clinical fusion | 0.816 | 0.013 | 0.823 |
+
+Fusion-minus-MRI pooled AUC differences are +0.0118, +0.0124 and +0.0032. Their conditional paired 95% bootstrap intervals all include zero. The current results do not establish a fusion benefit, and the simple age-only comparator is stronger. Pooled AUC combines predictions from separate fold models and can differ from mean fold AUC. Seed SD is a sensitivity measure on one cohort, not a confidence interval or external validation.
+
+Technical QC passed for 496 patients. Heuristic mask review flagged 426 retained cases: 425 have a selected slice with less than 1% of the peak mask area, 18 have crop enlargement from small disconnected components, and 17 have both flags. Full-span sampling commonly selects low-area endpoint slices; these flags are not clinical failure rates. The current run retains its fixed preprocessing. Area-aware sampling, mask-component sensitivity analysis and broader visual review remain development tasks.
+
+`outputs/development/validation/executed_results.md` contains the measured comparison and limitations. `verification.json` records the output audit, `raw_case_inference_check.json` records exact raw/cached inference agreement and rejection of incompatible preprocessing, and `descriptive_subgroups.csv`/`development_errors.csv` support further investigation. Subgroups include only 13 mutant patients aged 60 or older, so subgroup comparisons are descriptive. The historical 20-patient pilot below uses a different stopping protocol and is not a direct performance benchmark for this experiment.
 
 ## Repository setup
 
@@ -159,6 +177,42 @@ Same-patient age-and-sex logistic mean AUC is 0.800, and age-only logistic is 0.
 All 20 finite/grid checks passed and sampled overlays were inspected. BT0018 has lower T2 detail, BT0027 has disconnected mask regions, and BT0062 has remote small mask components that enlarge the crop. They remain in the feasibility pilot with review flags. Broader QC and the final mask policy should be resolved before expanding the primary experiment.
 
 The report includes the measured runtime and results. Main outputs include `pilot_metrics.csv`, `development_oof.csv`, `seed_sensitivity.csv`, `real_pilot_evidence.json`, model checkpoints and learning curves under `outputs/ipr/real_pilot`. Full-cohort acquisition, protocol freeze, calibration and reserved evaluation remain pending.
+
+## Expanded development workflow
+
+The expanded workflow uses every patient in the original 497-patient development partition. Its acquisition script requests the four MRI sequences and the automatic FeTS mask, reuses completed inputs, and records resumable transfer state. It saves a separate selection file and preserves the historical pilot records.
+
+With the existing Aspera Connect client running, select the destination for a new client session and acquire the development inputs.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/download_development.py --select-folder
+.\.venv\Scripts\python.exe scripts/run_development.py
+```
+
+Resume acquisition with `scripts/download_development.py`. When acquisition is already running in another terminal, `scripts/run_development.py --watch-acquisition` preprocesses complete cases while the download continues. `--available-only` explicitly runs an interim experiment on the available subset and stores it under a separate output directory.
+
+The settings are in `configs/development_validation.json`. Preprocessing and feature caches verify their input and output checksums before reuse. The optimized normalization applies the original whole-volume percentile bounds to the selected views. Its output matches the original real-patient tensor exactly in the regression check.
+
+Each of the five original outer folds is held out from model fitting, stopping, calibration and threshold selection. Within its training patients, 20 percent form a calibration holdout. The remaining patients are split into fitting and stopping subsets, using 20 percent for stopping. After selecting a neural stopping epoch, the model is refitted on fitting plus stopping patients. A regularised sigmoid is fitted to the untouched calibration predictions, and the calibration-set Youden J determines the operating threshold. The outer fold then provides raw discrimination, calibrated probability metrics and threshold-dependent scores.
+
+The comparison includes clinical MLP, MRI-only, MRI/clinical fusion, age-only logistic regression and age/sex logistic regression. All models use the same eligible patients and calibration holdouts. Seeds 42, 43 and 44 are recorded independently. The original pilot runner retains its earlier validation procedure for reproducing the historical IPR results.
+
+Outputs under `outputs/development/validation` include the exact feature snapshot, outer-fold membership, model histories, raw and calibrated probabilities, ROC and calibration curves, confusion matrices, conditional paired bootstrap analysis and three-seed summaries. Columns prefixed `calibrated_` report probability metrics and classification at 0.5. Columns prefixed `selected_threshold_` report classification using each fold's calibration-selected threshold. Final candidate models retain an independent development calibration holdout. Their calibration artifacts record base-model and preprocessing checksums, and the raw-case inference command reports calibrated outputs when those artifacts are available.
+
+Mask auditing records disconnected components, crop enlargement and selected slices with very small mask area. These are review flags, with cases retained for the initial comparison. The audit and sampled overlays support subsequent visual review and a documented mask-policy sensitivity analysis.
+
+After validation, run the output audit and descriptive error analysis:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify_development.py
+.\.venv\Scripts\python.exe scripts/analyse_development.py
+```
+
+The audit verifies feature provenance, unchanged patient folds, disjoint training roles, complete out-of-fold predictions, metric recomputation, reproduction of predictions from all saved fold models, and final-model calibration checksums. It writes `verification.json`. The analysis saves descriptive sex and age subgroup counts, performance measures and error records. These analyses support error investigation and require cautious interpretation.
+
+Use `scripts/predict_case.py --help` for raw-MRI inference arguments and supply `--models outputs/development/validation/seed_42/final_models` to use a calibrated development candidate. Match the four MRI sequences, supplied mask, age and sex for the same case. The command rejects a preprocessing version, sequence order or encoder checkpoint that differs from training provenance.
+
+The method follows the [scikit-learn guidance on nested validation](https://scikit-learn.org/stable/auto_examples/model_selection/plot_nested_cross_validation_iris.html) and [disjoint calibration data](https://scikit-learn.org/stable/modules/calibration.html). The implementation uses the project's pinned scikit-learn version. The reserved 125-patient cohort is retained for the final evaluation stage.
 
 ## Sources and attribution
 

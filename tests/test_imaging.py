@@ -12,7 +12,7 @@ from torch import nn
 
 from glioma_idh.evaluation import paired_auc_bootstrap
 from glioma_idh.features import encode_views
-from glioma_idh.imaging import load_case, normalise_volume, preprocess_case, select_slices
+from glioma_idh.imaging import intensity_bounds, load_case, normalise_volume, prepare_manifest, preprocess_case, select_slices
 from glioma_idh.multimodal import PatientHead, fit_head, load_common_development, run_development
 
 
@@ -36,6 +36,36 @@ def save_fixture(directory: Path, patient="SYNTHETIC_TEST", mask_empty=False):
 
 
 class ImagingTests(unittest.TestCase):
+    def test_slice_normalisation_matches_full_volume_with_same_bounds(self):
+        volume = np.random.default_rng(4).normal(size=(32, 36, 20)).astype(np.float32)
+        volume[:2] = 0
+        expected = normalise_volume(volume)[:, :, 7]
+        actual = normalise_volume(volume[:, :, 7], intensity_bounds(volume))
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_resume_checks_input_and_cache_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            row = save_fixture(root)
+            manifest = root / 'manifest.csv'
+            pd.DataFrame([row]).to_csv(manifest, index=False)
+            output = root / 'processed'
+            first = prepare_manifest(manifest, output, 'synthetic_software_test')
+            second = prepare_manifest(manifest, output, 'synthetic_software_test')
+            self.assertFalse(first.iloc[0].cache_reused)
+            self.assertTrue(second.iloc[0].cache_reused)
+            cache = output / 'SYNTHETIC_TEST.npz'
+            cache.write_bytes(b'interrupted cache')
+            repaired = prepare_manifest(manifest, output, 'synthetic_software_test')
+            self.assertFalse(repaired.iloc[0].cache_reused)
+            self.assertEqual(repaired.iloc[0].status, 'passed')
+            image = nib.load(row['t1_path'])
+            data = image.get_fdata()
+            data[4, 4, 4] = np.nan
+            nib.save(nib.Nifti1Image(data, image.affine), row['t1_path'])
+            changed = prepare_manifest(manifest, output, 'synthetic_software_test')
+            self.assertEqual(changed.iloc[0].status, 'failed')
+
     def test_case_produces_four_sequences_with_unique_axial_views(self):
         with tempfile.TemporaryDirectory() as temp:
             row = save_fixture(Path(temp))

@@ -86,13 +86,18 @@ def crop_bounds(mask: np.ndarray, spacing: list[float], margin_mm: float = 12) -
                  for c, m, size in zip(coords, margin, mask.shape))
 
 
-def normalise_volume(data: np.ndarray) -> np.ndarray:
+def intensity_bounds(data: np.ndarray) -> tuple[float, float]:
     foreground = data[data != 0]
     if len(foreground) < 2:
         raise ValueError("Image has insufficient nonzero brain foreground.")
     low, high = np.percentile(foreground, [1, 99])
     if high <= low:
         raise ValueError("Constant foreground cannot be intensity-normalised.")
+    return float(low), float(high)
+
+
+def normalise_volume(data: np.ndarray, bounds: tuple[float, float] | None = None) -> np.ndarray:
+    low, high = intensity_bounds(data) if bounds is None else bounds
     result = np.clip((data - low) / (high - low), 0, 1).astype(np.float32)
     result[data == 0] = 0
     return result
@@ -118,16 +123,19 @@ def preprocess_case(row: dict, count: int = 4, size: int = 224, margin_mm: float
     bounds = crop_bounds(mask, details["spacing_mm"], margin_mm)
     selected = select_slices(mask[bounds], count)
     z_global = [z + bounds[2].start for z in selected]
-    views = []
+    views, intensity_ranges = [], []
     for volume in volumes:
-        normalised = normalise_volume(volume)[bounds]
-        slices = [resize_pad(normalised[:, :, z], size) for z in selected]
+        scale_bounds = intensity_bounds(volume)
+        intensity_ranges.append(list(scale_bounds))
+        cropped = volume[bounds]
+        slices = [resize_pad(normalise_volume(cropped[:, :, z], scale_bounds), size) for z in selected]
         views.append(np.repeat(np.stack(slices)[:, None, :, :], 3, axis=1))
     result = np.stack(views).astype(np.float32)  # [sequence, valid_slice, RGB, H, W]
     details.update({
         "patient_id": row["patient_id"], "preprocess_version": PREPROCESS_VERSION,
         "selected_global_axial_slices": z_global, "tensor_shape": list(result.shape),
         "crop_bounds": [[b.start, b.stop] for b in bounds], "margin_mm": margin_mm,
+        "intensity_bounds": intensity_ranges,
         "normalisation": "per-volume nonzero foreground percentiles 1 and 99; clipped to [0,1]",
         "elapsed_seconds": round(time.perf_counter() - started, 3),
     })
@@ -141,8 +149,9 @@ def save_qc_figure(volumes, mask, details: dict, destination: Path, data_scope: 
     destination.parent.mkdir(parents=True, exist_ok=True)
     z = details["selected_global_axial_slices"][len(details["selected_global_axial_slices"]) // 2]
     fig, axes = plt.subplots(1, 4, figsize=(11, 3.3), constrained_layout=True)
-    for axis, sequence, volume in zip(axes, SEQUENCES, volumes):
-        axis.imshow(normalise_volume(volume)[:, :, z].T, cmap="gray", origin="lower", vmin=0, vmax=1)
+    ranges = details.get('intensity_bounds') or [intensity_bounds(volume) for volume in volumes]
+    for axis, sequence, volume, scale_bounds in zip(axes, SEQUENCES, volumes, ranges):
+        axis.imshow(normalise_volume(volume[:, :, z], scale_bounds).T, cmap="gray", origin="lower", vmin=0, vmax=1)
         axis.contour(mask[:, :, z].T, levels=[0.5], colors=["#f2b447"], linewidths=0.7)
         x, y = details["crop_bounds"][:2]
         from matplotlib.patches import Rectangle
@@ -165,14 +174,36 @@ def prepare_manifest(manifest_path: Path, output: Path, data_scope: str = "real_
         if not patient.replace("_", "").replace("-", "").isalnum():
             raise ValueError("Unsafe patient ID for cache path.")
         try:
+            cache_path = output / f"{patient}.npz"
+            details_path = output / f"{patient}.json"
+            figure_path = output / "qc" / f"{patient}.png"
+            input_hashes = {column: sha256(Path(row[column])) for column in PATH_COLUMNS}
+            previous = {}
+            if details_path.is_file():
+                try:
+                    previous = json.loads(details_path.read_text())
+                except (ValueError, OSError):
+                    previous = {}
+            if (cache_path.is_file() and figure_path.is_file()
+                    and previous.get("input_sha256") == input_hashes
+                    and previous.get("data_scope") == data_scope
+                    and previous.get("preprocess_version") == PREPROCESS_VERSION
+                    and previous.get("cache_sha256") == sha256(cache_path)):
+                rows.append({"patient_id": patient, "status": "passed", "reason": "",
+                             "cache_path": str(cache_path.resolve()), "data_scope": data_scope,
+                             "cache_reused": True})
+                continue
             tensor, details, originals = preprocess_case(row)
             details["data_scope"] = data_scope
-            np.savez_compressed(output / f"{patient}.npz", views=tensor)
-            write_json(output / f"{patient}.json", details)
-            save_qc_figure(originals[0], originals[1], details, output / "qc" / f"{patient}.png", data_scope)
-            rows.append({"patient_id": patient, "status": "passed", "reason": "", "cache_path": str((output / f"{patient}.npz").resolve()), "data_scope": data_scope})
+            np.savez_compressed(cache_path, views=tensor)
+            details["cache_sha256"] = sha256(cache_path)
+            write_json(details_path, details)
+            save_qc_figure(originals[0], originals[1], details, figure_path, data_scope)
+            rows.append({"patient_id": patient, "status": "passed", "reason": "", "cache_path": str(cache_path.resolve()),
+                         "data_scope": data_scope, "cache_reused": False})
         except (ValueError, OSError, nib.filebasedimages.ImageFileError) as error:
-            rows.append({"patient_id": patient, "status": "failed", "reason": str(error), "cache_path": "", "data_scope": data_scope})
+            rows.append({"patient_id": patient, "status": "failed", "reason": str(error), "cache_path": "",
+                         "data_scope": data_scope, "cache_reused": False})
     result = pd.DataFrame(rows)
     result.to_csv(output / "image_qc.csv", index=False)
     return result

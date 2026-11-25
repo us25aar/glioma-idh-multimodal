@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
@@ -68,16 +66,32 @@ def extract_features(qc_csv: Path, output: Path, weights_dir: Path, device: str 
     weights_hash = sha256(checkpoint)
     for row in selected.itertuples():
         cache = Path(row.cache_path)
+        cache_details = json.loads(cache.with_suffix('.json').read_text())
+        if (cache_details.get('patient_id') != row.patient_id or cache_details.get('data_scope') != row.data_scope
+                or cache_details.get('preprocess_version') != PREPROCESS_VERSION):
+            raise ValueError('Preprocessed cache provenance differs from the feature request.')
         signature = {"cache_sha256": sha256(cache), "weights_sha256": weights_hash, "sequence_order": list(SEQUENCES), "preprocess_version": PREPROCESS_VERSION}
+        if cache_details.get('cache_sha256', signature['cache_sha256']) != signature['cache_sha256']:
+            raise ValueError('Preprocessed cache checksum differs from its provenance.')
         vector_path = output / f"{row.patient_id}.npy"
         info_path = output / f"{row.patient_id}.json"
-        if vector_path.exists() and info_path.exists() and json.loads(info_path.read_text()) == signature:
+        previous = {}
+        if info_path.is_file():
+            try:
+                previous = json.loads(info_path.read_text())
+            except (ValueError, OSError):
+                previous = {}
+        cached = (vector_path.is_file() and all(previous.get(key) == value for key, value in signature.items())
+                  and previous.get('vector_sha256') == sha256(vector_path))
+        if cached:
             vector = np.load(vector_path, allow_pickle=False)
+            if vector.shape != (2048,) or not np.isfinite(vector).all():
+                raise ValueError('Invalid cached feature vector.')
         else:
             with np.load(cache, allow_pickle=False) as bundle:
                 vector = encode_views(encoder, bundle["views"], batch_size, device)
             np.save(vector_path, vector, allow_pickle=False)
-            write_json(info_path, signature)
+            write_json(info_path, {**signature, 'vector_sha256': sha256(vector_path)})
         vectors.append(vector)
         rows.append({"patient_id": row.patient_id, "data_scope": row.data_scope})
     np.savez_compressed(output / "features.npz", patient_ids=np.array([r["patient_id"] for r in rows]), features=np.stack(vectors))
