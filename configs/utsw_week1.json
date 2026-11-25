@@ -1,0 +1,14 @@
+{
+  "dataset": "UTSW-Glioma",
+  "dataset_doi": "10.7937/DFAE-1B86",
+  "metadata_path": "data/raw/utsw/UTSW_Glioma_Metadata-2-1.tsv",
+  "output_dir": "outputs/week1",
+  "seed": 42,
+  "test_fraction": 0.2,
+  "development_folds": 5,
+  "positive_class": "IDH-mutant",
+  "allowed_clinical_features": ["age", "sex"],
+  "models": ["majority", "age_logistic", "clinical_logistic", "random_forest"],
+  "evaluation_scope": "development_cross_validation_only",
+  "image_verification": "pending_download_and_QC"
+}

@@ -1,0 +1,3 @@
+# Optional extension; the Windows wheel is approximately 125 MB.
+-r requirements.txt
+xgboost==2.1.3

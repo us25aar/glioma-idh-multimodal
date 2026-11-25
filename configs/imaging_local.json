@@ -1,0 +1,17 @@
+{
+  "sequence_order": ["t1", "t1ce", "t2", "flair"],
+  "slices_per_sequence": 4,
+  "image_side": 224,
+  "crop_margin_mm": 12,
+  "normalisation": "within-patient nonzero percentiles 1 and 99",
+  "encoder": "resnet18 IMAGENET1K_V1 frozen",
+  "feature_dimensions": 2048,
+  "device": "cpu",
+  "image_batch_size": 4,
+  "patient_batch_size": 32,
+  "seed": 42,
+  "maximum_epochs": 50,
+  "early_stopping_patience": 8,
+  "clinical_predictors": ["age", "sex"],
+  "test_evaluation_enabled": false
+}
